@@ -1,129 +1,6 @@
-<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Personal News & Intel Hub</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
+<!-- Application Script -->
     <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        brand: { 500: '#2563eb', 600: '#1d4ed8', 700: '#1e40af' }
-                    }
-                }
-            }
-        }
-    </script>
-</head>
-<body class="bg-slate-900 text-slate-100 font-sans min-h-screen flex flex-col">
-
-    <!-- Top Navigation Header -->
-    <header class="bg-slate-800 border-b border-slate-700 sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
-            <div class="flex items-center space-x-3">
-                <div class="bg-brand-600 text-white font-bold p-2 rounded-lg text-lg">NH</div>
-                <h1 class="text-xl font-bold tracking-tight">Personalized Intel Hub</h1>
-            </div>
-
-            <!-- Controls & Quick Catchup Button -->
-            <div class="flex items-center space-x-3">
-                <button id="catchupBtn" onclick="toggleCatchup()" class="bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold px-3 py-2 rounded-md transition flex items-center space-x-1">
-                    <span>⚡ Daily Catchup (48h)</span>
-                </button>
-                <select id="sortSelect" onchange="fetchNews()" class="bg-slate-700 text-xs text-slate-200 border border-slate-600 rounded-md px-2 py-2 focus:outline-none">
-                    <option value="latest">Sort: Latest First</option>
-                    <option value="relevance">Sort: Most Relevant</option>
-                    <option value="interactions">Sort: Highest Interaction</option>
-                </select>
-                <button onclick="openArchiveModal()" class="bg-slate-700 hover:bg-slate-600 text-xs px-3 py-2 rounded-md font-medium border border-slate-600">
-                    📂 Archive & Baskets
-                </button>
-            </div>
-        </div>
-
-        <!-- Category Tabs -->
-        <nav class="max-w-7xl mx-auto px-4 flex space-x-1 overflow-x-auto border-t border-slate-700 text-sm font-medium">
-            <button onclick="switchCategory('all', this)" class="tab-btn px-4 py-2 border-b-2 border-brand-500 text-brand-500 whitespace-nowrap">Unified Feed</button>
-            <button onclick="switchCategory('sports', this)" class="tab-btn px-4 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">Sports</button>
-            <button onclick="switchCategory('engineering', this)" class="tab-btn px-4 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">Coastal & Logistics</button>
-            <button onclick="switchCategory('finance', this)" class="tab-btn px-4 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">Global Markets</button>
-            <button onclick="switchCategory('hobbies', this)" class="tab-btn px-4 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">Hobbies & Wildlife</button>
-            <button onclick="switchCategory('conflicts', this)" class="tab-btn px-4 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">Global Intel</button>
-            <button onclick="switchCategory('saved', this)" class="tab-btn px-4 py-2 border-b-2 border-transparent text-slate-400 hover:text-slate-200 whitespace-nowrap">Read Later (<span id="savedCount">0</span>)</button>
-        </nav>
-    </header>
-
-    <!-- Main Content Grid -->
-    <main class="max-w-7xl mx-auto px-4 py-6 flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 w-full">
-        
-        <!-- Primary Feed (3 Columns on Large Screens) -->
-        <section class="lg:col-span-3 space-y-4">
-            <div id="feedStatus" class="text-xs text-slate-400 flex items-center justify-between">
-                <span id="activeCategoryLabel">Showing: Unified Feed</span>
-                <span id="articleCount">0 articles loaded</span>
-            </div>
-
-            <div id="articlesContainer" class="space-y-4">
-                <!-- Dynamic Article Cards Injected Here -->
-            </div>
-        </section>
-
-        <!-- Sidebar (Sticky Widgets) -->
-        <aside class="space-y-6">
-            <!-- Live Sports & Breaking Bulletin Widget -->
-            <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                <div class="flex items-center justify-between mb-3">
-                    <h2 class="text-sm font-bold uppercase tracking-wider text-brand-500 flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span> Live Bulletins
-                    </h2>
-                    <span class="text-[10px] bg-slate-700 px-2 py-0.5 rounded text-slate-300">Ticker</span>
-                </div>
-                <div id="bulletinFeed" class="space-y-3 divide-y divide-slate-700/50 text-xs">
-                    <!-- Bulletins Injected Here -->
-                </div>
-            </div>
-
-            <!-- Quick Portfolio / Watchlist Sidebar Placeholder -->
-            <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
-                <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300 mb-3">Key Focus Tracker</h2>
-                <div class="space-y-2 text-xs">
-                    <div class="flex justify-between items-center bg-slate-900/50 p-2 rounded">
-                        <span class="font-medium text-slate-200">NYSE / JSE Updates</span>
-                        <span class="text-emerald-400 font-mono">Active</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/50 p-2 rounded">
-                        <span class="font-medium text-slate-200">Port & Rail Exports</span>
-                        <span class="text-emerald-400 font-mono">Active</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/50 p-2 rounded">
-                        <span class="font-medium text-slate-200">Phillies / F1 / Rugby</span>
-                        <span class="text-emerald-400 font-mono">Active</span>
-                    </div>
-                </div>
-            </div>
-        </aside>
-    </main>
-
-    <!-- Archive & Baskets Modal -->
-    <div id="archiveModal" class="fixed inset-0 bg-black/70 hidden z-50 flex items-center justify-center p-4">
-        <div class="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-2xl p-6 space-y-4">
-            <div class="flex justify-between items-center border-b border-slate-700 pb-3">
-                <h3 class="text-lg font-bold">Completed Reads Archive & Baskets</h3>
-                <button onclick="closeArchiveModal()" class="text-slate-400 hover:text-white">&times;</button>
-            </div>
-            <div id="archiveList" class="max-h-96 overflow-y-auto space-y-2 text-xs">
-                <p class="text-slate-400">No completed reads archived yet.</p>
-            </div>
-        </div>
-    </div>
-
-    <!-- Application Script -->
-    <script>
-        const API_URL = "https://personalised-feed.onrender.com/";
+        const API_URL = "https://personalised-feed.onrender.com/api";
         let currentCategory = "all";
         let isCatchupActive = false;
         let savedArticles = JSON.parse(localStorage.getItem("savedArticles") || "[]");
@@ -163,7 +40,7 @@
 
         async function fetchNews() {
             const container = document.getElementById("articlesContainer");
-            container.innerHTML = `<div class="text-center py-12 text-slate-500 text-sm">Loading articles...</div>`;
+            container.innerHTML = `<div class="text-center py-12 text-slate-500 text-sm">Loading articles... (Render may take 30s to wake up if idle)</div>`;
 
             if (currentCategory === "saved") {
                 renderArticles(savedArticles);
@@ -179,7 +56,7 @@
                 const data = await res.json();
                 renderArticles(data.articles);
             } catch (err) {
-                container.innerHTML = `<div class="p-4 bg-red-900/30 text-red-400 rounded-lg text-xs">Failed to fetch articles. Ensure backend server is running on localhost:8000.</div>`;
+                container.innerHTML = `<div class="p-4 bg-red-900/30 text-red-400 rounded-lg text-xs">Failed to fetch articles. Server may be starting up—please refresh in 30 seconds.</div>`;
             }
         }
 
@@ -246,7 +123,6 @@
         }
 
         function archiveArticle(article) {
-            // Prompts user for quick basket categorization
             const basket = prompt("Sort into Basket (e.g., Engineering, Sports Intel, Market Research):", "General") || "General";
             article.basket = basket;
             archivedArticles.push(article);
@@ -280,5 +156,3 @@
             document.getElementById("archiveModal").classList.add("hidden");
         }
     </script>
-</body>
-</html>
