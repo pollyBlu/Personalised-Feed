@@ -181,14 +181,23 @@
         let lastFetchedArticles = []; // raw articles from the last fetch, before weighting is applied
         let bulletinsData = [];
 
+        // Guards against out-of-order network responses: if the person
+        // switches tabs/region/sort quickly, an older, slower request can
+        // resolve AFTER a newer one and clobber the screen with stale data.
+        // Every fetchNews() call stamps itself with the current counter;
+        // a response is only rendered if it's still the latest one issued.
+        let activeNewsRequestId = 0;
+        let activeBulletinsRequestId = 0;
+        let bulletinsRefreshTimer = null;
+
         // Mirrors the taxonomy on the backend (main.py TOPIC_KEYWORDS) so weighting
         // controls can be rendered even before /api/topics responds.
         const TOPICS_BY_CATEGORY = {
-            sports: ["Phillies/MLB", "Premier League", "Golf", "Cricket", "Rugby", "F1", "General"],
-            engineering: ["Ports", "Dredging", "Rail", "General"],
+            sports: ["Phillies/MLB", "Premier League", "Golf", "Cricket", "Rugby", "F1", "Champions League", "General"],
+            engineering: ["Ports", "Dredging", "Rail", "Water Infrastructure", "General"],
             finance: ["JSE", "ETF", "Markets", "General"],
             hobbies: ["Woodworking", "Wildlife", "Automotive", "General"],
-            conflicts: ["Africa", "Middle East", "World News", "General"]
+            conflicts: ["Africa", "Middle East", "Defense & Security", "World News", "General"]
         };
         const CATEGORY_LABELS = {
             sports: "Sports",
@@ -204,6 +213,9 @@
             fetchTopics();
             fetchNews();
             fetchBulletins();
+            // Bulletins are "live" - keep them refreshing on their own
+            // rather than only ever showing what was true on page load.
+            bulletinsRefreshTimer = setInterval(fetchBulletins, 3 * 60 * 1000);
         });
 
         async function fetchTopics() {
@@ -250,6 +262,7 @@
             localStorage.setItem("regionFilter", region);
             updateRegionButtons();
             fetchNews();
+            fetchBulletins(); // bulletins are region-scoped too, keep them in sync
         }
 
         function updateRegionButtons() {
@@ -265,6 +278,13 @@
         }
 
         async function fetchNews() {
+            // Stamp this call as the latest one. Any in-flight request from
+            // a previous tab/region/sort click becomes "stale" the moment
+            // this fires, and will be ignored when (if) it eventually resolves.
+            const requestId = ++activeNewsRequestId;
+            const requestedCategory = currentCategory;
+            const requestedRegion = currentRegion;
+
             const container = document.getElementById("articlesContainer");
             container.innerHTML = `<div class="text-center py-12 text-slate-500 text-sm">Loading articles... (Render server may take ~30s to wake up)</div>`;
 
@@ -275,15 +295,21 @@
             }
 
             const sort = document.getElementById("sortSelect").value;
-            let url = `${API_URL}/news?category=${currentCategory}&sort=${sort}&region=${currentRegion}`;
+            let url = `${API_URL}/news?category=${requestedCategory}&sort=${sort}&region=${requestedRegion}`;
             if (isCatchupActive) url += `&catchup_hours=48`;
 
             try {
                 const res = await fetch(url);
                 const data = await res.json();
+
+                // A newer request has since been issued (or the user moved on) -
+                // drop this response instead of overwriting fresher content.
+                if (requestId !== activeNewsRequestId) return;
+
                 lastFetchedArticles = data.articles;
                 renderArticles(applyWeights(data.articles));
             } catch (err) {
+                if (requestId !== activeNewsRequestId) return;
                 container.innerHTML = `<div class="p-4 bg-red-900/30 text-red-400 rounded-lg text-xs">Failed to fetch articles. Server may be starting up—please refresh in 30 seconds.</div>`;
             }
         }
@@ -402,9 +428,14 @@
         }
 
         async function fetchBulletins() {
+            const requestId = ++activeBulletinsRequestId;
             try {
-                const res = await fetch(`${API_URL}/bulletins`);
-                bulletinsData = await res.json();
+                const res = await fetch(`${API_URL}/bulletins?region=${currentRegion}`);
+                const data = await res.json();
+
+                if (requestId !== activeBulletinsRequestId) return; // stale, superseded by a newer call
+
+                bulletinsData = data;
                 document.getElementById("bulletinFeed").innerHTML = bulletinsData.map((b, i) => `
                     <div class="pt-2 cursor-pointer hover:bg-slate-700/30 rounded px-1 -mx-1 transition" onclick="openBulletinModal(${i})">
                         <p class="text-slate-200 leading-snug">${b.text}</p>
