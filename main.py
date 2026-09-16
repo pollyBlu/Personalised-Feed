@@ -1,10 +1,17 @@
 import time
+import socket
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import feedparser
 import pydantic
+
+# Give every outbound feed fetch a hard timeout so one slow/dead source
+# (of which there are now ~45) can't stall the whole request.
+FEED_FETCH_TIMEOUT_SECONDS = 8
+MAX_WORKERS = 20
 
 app = FastAPI(title="Personalized News Aggregator")
 
@@ -27,19 +34,57 @@ FEEDS = {
         {"source": "BBC Golf", "url": "http://feeds.bbci.co.uk/sport/golf/rss.xml", "region": "global"},
         {"source": "Cricinfo - Global", "url": "https://www.espncricinfo.com/rss/content/story/news.xml", "region": "global"},
         {"source": "SA Rugby / Springboks", "url": "https://www.sarugby.co.za/rss/", "region": "za"},
-        {"source": "Formula 1", "url": "https://www.formula1.com/content/fom-website/en/latest/all.xml", "region": "global"}
+        {"source": "Formula 1", "url": "https://www.formula1.com/content/fom-website/en/latest/all.xml", "region": "global"},
+        # --- Phillies deep coverage ---
+        {"source": "Philadelphia Inquirer - Phillies", "url": "https://www.inquirer.com/arc/outboundfeeds/rss/category/sports/phillies/", "region": "global"},
+        {"source": "The Good Phight (SB Nation)", "url": "https://www.goodfight.com/rss/index.xml", "region": "global"},
+        {"source": "PhoulBallz - Prospect Intel", "url": "https://phoulballz.com/feed/", "region": "global"},
+        {"source": "FanSided Phillies Network", "url": "https://thatballisouttahere.com/feed", "region": "global"},
+        {"source": "Phillies Insider", "url": "https://feeds.feedburner.com/PhilliesInsider", "region": "global"},
+        # --- Man United / Premier League deep coverage ---
+        {"source": "Stretty News (MUFC)", "url": "https://www.strettyend.com/feed", "region": "global"},
+        {"source": "The Peoples Person (United News)", "url": "https://thepeoplesperson.com/feed/", "region": "global"},
+        {"source": "United In Focus", "url": "https://www.unitedinfocus.com/feed/", "region": "global"},
+        {"source": "Football365 Premier League", "url": "https://football365.com/premier-league/rss", "region": "global"},
+        # --- Springbok Rugby, Lions URC & SA domestic ---
+        {"source": "SA Rugby Magazine", "url": "https://www.sarugbymag.co.za/feed/", "region": "za"},
+        {"source": "Rugby365 SA Focus", "url": "https://www.rugby365.com/feed/", "region": "za"},
+        {"source": "United Rugby Championship (URC)", "url": "https://www.unitedrugby.com/rss", "region": "global"},
+        {"source": "Super Rugby & SANZAAR News", "url": "https://super.rugby/rubicon/rss/news/", "region": "global"},
+        {"source": "KEO.co.za SA Rugby Analysis", "url": "https://www.keo.co.za/feed/", "region": "za"},
+        # --- Proteas & SA domestic cricket ---
+        {"source": "SA Cricket Magazine", "url": "https://www.sacricketmag.com/feed/", "region": "za"},
+        {"source": "ESPNcricinfo South Africa Feed", "url": "https://www.espncricinfo.com/rss/content/story/feeds/2.xml", "region": "za"},
+        {"source": "Cricket South Africa (Official)", "url": "https://cricket.co.za/feed/", "region": "za"},
+        {"source": "Club & Grassroots SA Cricket", "url": "https://clubcricket.co.za/feed/", "region": "za"},
+        # --- Golf & Champions League ---
+        {"source": "Golf Monthly", "url": "https://www.golfmonthly.com/feeds/all", "region": "global"},
+        {"source": "Golf Digest", "url": "https://www.golfdigest.com/feed/rss", "region": "global"},
+        {"source": "GolfWRX (Equipment & Tech)", "url": "https://www.golfwrx.com/feed/", "region": "global"},
+        {"source": "UEFA Champions League (Official)", "url": "https://www.uefa.com/rss/uefachampionsleague/news/rss.xml", "region": "global"},
+        {"source": "The Coaches' Voice", "url": "https://www.coachesvoice.com/feed/", "region": "global"}
     ],
     "engineering": [
         {"source": "Port Technology Intl", "url": "https://www.porttechnology.org/feed/", "region": "global"},
         {"source": "Dredging Today", "url": "https://www.dredgingtoday.com/feed/", "region": "global"},
         {"source": "Railway Gazette Intl", "url": "https://www.railwaygazette.com/124.rss", "region": "global"},
         {"source": "Engineering News SA", "url": "https://www.engineeringnews.co.za/rss/engineering-news", "region": "za"},
-        {"source": "Transnet Port Terminals", "url": "https://www.transnetportterminals.net/rss", "region": "za"}
+        {"source": "Transnet Port Terminals", "url": "https://www.transnetportterminals.net/rss", "region": "za"},
+        # --- Southern Africa port, coastal & water engineering ---
+        {"source": "Engineering News - Africa Edition", "url": "https://www.engineeringnews.co.za/page/rss-feed/feed:africa-edition", "region": "za"},
+        {"source": "Maritime Executive - Ports & Infrastructure", "url": "https://www.maritime-executive.com/rss", "region": "global"},
+        {"source": "Infrastructure News SA", "url": "https://www.infrastructurene.ws/feed/", "region": "za"},
+        {"source": "SA Dept. of Water & Sanitation", "url": "https://www.dws.gov.za/Rss/default.aspx", "region": "za"},
+        {"source": "Africa Ports & Ships", "url": "https://www.africaports.co.za/#feed", "region": "za"}
     ],
     "finance": [
         {"source": "Reuters Markets", "url": "http://feeds.reuters.com/reuters/businessNews", "region": "global"},
         {"source": "CNBC Finance", "url": "https://www.cnbc.com/id/10000664/device/rss/rss.html", "region": "global"},
-        {"source": "Moneyweb SA (JSE Focus)", "url": "https://www.moneyweb.co.za/feed/", "region": "za"}
+        {"source": "Moneyweb SA (JSE Focus)", "url": "https://www.moneyweb.co.za/feed/", "region": "za"},
+        # --- South African financial & market intel ---
+        {"source": "Daily Investor SA", "url": "https://dailyinvestor.com/feed/", "region": "za"},
+        {"source": "Business Day SA", "url": "https://www.businesslive.co.za/rss/?publication=bd", "region": "za"},
+        {"source": "Fin24 / News24 Financial", "url": "https://www.fin24.com/rss/southafrica", "region": "za"}
     ],
     "hobbies": [
         {"source": "Fine Woodworking", "url": "https://www.finewoodworking.com/feed", "region": "global"},
@@ -50,7 +95,13 @@ FEEDS = {
     "conflicts": [
         {"source": "BBC World News", "url": "http://feeds.bbci.co.uk/news/world/rss.xml", "region": "global"},
         {"source": "Al Jazeera English", "url": "https://www.aljazeera.com/xml/rss/all.xml", "region": "global"},
-        {"source": "News24 South Africa", "url": "https://www.news24.com/news24/rss", "region": "za"}
+        {"source": "News24 South Africa", "url": "https://www.news24.com/news24/rss", "region": "za"},
+        # --- Global conflict & geopolitics deep coverage ---
+        {"source": "Defense News Global", "url": "https://www.defensenews.com/arc/outboundfeeds/rss/", "region": "global"},
+        {"source": "Institute for the Study of War (ISW)", "url": "https://www.understandingwar.org/rss.xml", "region": "global"},
+        {"source": "War on the Rocks", "url": "https://war-on-the-rocks.com/feed/", "region": "global"},
+        {"source": "Bellingcat OSINT Investigations", "url": "https://www.bellingcat.com/feed/", "region": "global"},
+        {"source": "GDELT Project - Conflict Event Stream", "url": "https://gdeltdoc.blob.core.windows.net/data/gdeltv2/rss/index.html", "region": "global"}
     ]
 }
 
@@ -71,11 +122,13 @@ TOPIC_KEYWORDS = {
         ("Cricket", ["cricket", "ipl", "sa20", "test match", "odi", "t20"]),
         ("Rugby", ["rugby", "springboks", "lions", "six nations", "urc"]),
         ("F1", ["formula 1", "f1", "carlos sainz", "grand prix", "paddock"]),
+        ("Champions League", ["champions league", "uefa champions league", "ucl", "ballon d'or"]),
     ],
     "engineering": [
         ("Ports", ["port", "harbour", "harbor", "terminal", "container"]),
         ("Dredging", ["dredge", "dredging"]),
         ("Rail", ["rail", "railway", "locomotive", "freight"]),
+        ("Water Infrastructure", ["water", "sanitation", "dam", "desalination", "water treatment"]),
     ],
     "finance": [
         ("JSE", ["jse", "johannesburg stock"]),
@@ -90,6 +143,7 @@ TOPIC_KEYWORDS = {
     "conflicts": [
         ("Africa", ["africa", "south africa", "sadc"]),
         ("Middle East", ["gaza", "israel", "middle east", "iran", "lebanon"]),
+        ("Defense & Security", ["defense", "defence", "military", "nato", "weapons", "missile", "army", "navy", "air force"]),
         ("World News", ["united nations", "un ", "diplomat", "sanctions"]),
     ],
 }
@@ -111,6 +165,67 @@ def parse_published_time(entry):
         return datetime.fromtimestamp(time.mktime(entry.updated_parsed))
     return datetime.now()
 
+
+def format_relative_time(dt: datetime) -> str:
+    seconds = max((datetime.now() - dt).total_seconds(), 0)
+    if seconds < 60:
+        return "just now"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes} min{'s' if minutes != 1 else ''} ago"
+    hours = int(minutes // 60)
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = int(hours // 24)
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def fetch_one_feed(cat: str, feed_info: dict, catchup_hours: Optional[int]):
+    """Fetches and parses a single feed, with a hard socket timeout so a
+    slow/dead source can't hang the whole request. Returns a list of
+    already-shaped article dicts (never raises)."""
+    articles = []
+    old_timeout = socket.getdefaulttimeout()
+    try:
+        socket.setdefaulttimeout(FEED_FETCH_TIMEOUT_SECONDS)
+        parsed = feedparser.parse(feed_info["url"])
+        for entry in parsed.entries[:10]:  # Limit per source for performance
+            pub_date = parse_published_time(entry)
+
+            if catchup_hours:
+                cutoff = datetime.now() - timedelta(hours=catchup_hours)
+                if pub_date < cutoff:
+                    continue
+
+            title = entry.get("title", "No Title")
+            summary = entry.get("summary", entry.get("description", ""))
+            link = entry.get("link", "#")
+
+            relevance = sum(1 for kw in KEYWORD_BOOSTS if kw.lower() in (title + summary).lower())
+            interactions = round((pub_date.timestamp() % 100) + (relevance * 10))
+            topic = classify_topic(cat, title + " " + summary)
+
+            articles.append({
+                "id": abs(hash(link)),
+                "title": title,
+                "summary": summary[:250] + "..." if len(summary) > 250 else summary,
+                "link": link,
+                "category": cat,
+                "topic": topic,
+                "source": feed_info["source"],
+                "region": feed_info.get("region", "global"),
+                "published": pub_date.isoformat(),
+                "published_formatted": pub_date.strftime("%b %d, %H:%M"),
+                "relevance": relevance,
+                "interactions": interactions
+            })
+    except Exception:
+        pass
+    finally:
+        socket.setdefaulttimeout(old_timeout)
+    return articles
+
+
 @app.get("/api/news")
 def get_news(
     category: Optional[str] = Query("all"),
@@ -121,52 +236,27 @@ def get_news(
     articles = []
     categories_to_fetch = FEEDS.keys() if category == "all" else [category]
 
+    # Build the list of (category, feed) jobs, applying the region filter
+    # up front so we never even fetch sources outside the requested region.
+    jobs = []
     for cat in categories_to_fetch:
         if cat not in FEEDS:
             continue
         for feed_info in FEEDS[cat]:
-            # Region filter: skip sources that don't match the requested region
             if region in ("za", "global") and feed_info.get("region", "global") != region:
                 continue
-            try:
-                parsed = feedparser.parse(feed_info["url"])
-                for entry in parsed.entries[:10]: # Limit per source for performance
-                    pub_date = parse_published_time(entry)
-                    
-                    # Filter for Catchup Mode if requested
-                    if catchup_hours:
-                        cutoff = datetime.now() - timedelta(hours=catchup_hours)
-                        if pub_date < cutoff:
-                            continue
+            jobs.append((cat, feed_info))
 
-                    title = entry.get("title", "No Title")
-                    summary = entry.get("summary", entry.get("description", ""))
-                    link = entry.get("link", "#")
-
-                    # Calculate dummy relevance based on keyword hits
-                    relevance = sum(1 for kw in KEYWORD_BOOSTS if kw.lower() in (title + summary).lower())
-                    
-                    # Simulated interaction score (for sorting)
-                    interactions = round((pub_date.timestamp() % 100) + (relevance * 10))
-
-                    topic = classify_topic(cat, title + " " + summary)
-
-                    articles.append({
-                        "id": hash(link),
-                        "title": title,
-                        "summary": summary[:250] + "..." if len(summary) > 250 else summary,
-                        "link": link,
-                        "category": cat,
-                        "topic": topic,
-                        "source": feed_info["source"],
-                        "region": feed_info.get("region", "global"),
-                        "published": pub_date.isoformat(),
-                        "published_formatted": pub_date.strftime("%b %d, %H:%M"),
-                        "relevance": relevance,
-                        "interactions": interactions
-                    })
-            except Exception as e:
-                continue
+    # Fetch every feed concurrently. With ~45 sources now in the catalog,
+    # doing this sequentially was slow enough to occasionally time out
+    # mid-request, which is what produced partial/stale-looking results
+    # (e.g. "unified feed" silently truncating to whichever categories had
+    # finished fetching before the timeout).
+    if jobs:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(fetch_one_feed, cat, feed_info, catchup_hours) for cat, feed_info in jobs]
+            for future in as_completed(futures):
+                articles.extend(future.result())
 
     # Sorting Logic
     if sort == "latest":
@@ -186,49 +276,43 @@ def get_topics():
     return {cat: [name for name, _ in topics] for cat, topics in TOPIC_KEYWORDS.items()}
 
 
+BULLETIN_CANDIDATES_PER_FEED = 3
+BULLETIN_COUNT = 8
+
+
 @app.get("/api/bulletins")
-def get_bulletins():
-    # Sidebar quick sports and breaking headlines bulletin.
-    # Each bulletin now carries a "detail" (fuller text) and a "link"
-    # (source URL) so it can be opened for more context.
-    return [
-        {
-            "time": "10 mins ago",
-            "text": "Phillies secure series win with late home run in the 9th.",
-            "detail": "The Phillies closed out the series with a walk-off home run in the bottom of the 9th, "
-                       "extending their winning streak. The bullpen held a one-run lead through the final two innings "
-                       "after a shaky start from the opener.",
-            "link": "https://www.mlb.com/phillies"
-        },
-        {
-            "time": "25 mins ago",
-            "text": "SA20 auction details finalized for upcoming season.",
-            "detail": "Franchise owners finalized retention lists ahead of the SA20 player auction, with several "
-                       "overseas stars expected to headline the marquee bracket. The auction date and full player "
-                       "pool will be published shortly.",
-            "link": "https://www.sa20.co.za"
-        },
-        {
-            "time": "1 hour ago",
-            "text": "Springboks squad announced for winter international fixtures.",
-            "detail": "The Springboks coaching staff named a 34-man squad for the upcoming winter internationals, "
-                       "with a handful of new caps included alongside the regular starting core.",
-            "link": "https://www.sarugby.co.za"
-        },
-        {
-            "time": "2 hours ago",
-            "text": "Major Southern African port expansion project greenlit.",
-            "detail": "Regulators approved a multi-year expansion of container handling capacity at a major "
-                       "Southern African port, aimed at easing congestion and reducing export bottlenecks over the "
-                       "next three years.",
-            "link": "https://www.porttechnology.org"
-        },
-        {
-            "time": "3 hours ago",
-            "text": "Carlos Sainz puts in top time during FP2 session.",
-            "detail": "Carlos Sainz topped the times in the second free practice session, edging out the "
-                       "championship leaders on a low-fuel run. Teams reported mixed tyre degradation heading into "
-                       "qualifying.",
-            "link": "https://www.formula1.com"
-        }
-    ]
+def get_bulletins(region: Optional[str] = Query("all")):
+    """Live ticker of the freshest headlines across every feed in the
+    catalog (optionally scoped to a region), refreshed on every request.
+    Each bulletin carries a "detail" (fuller summary) and a "link"
+    (source URL) so it can be opened for more context."""
+    jobs = []
+    for cat, feeds in FEEDS.items():
+        for feed_info in feeds:
+            if region in ("za", "global") and feed_info.get("region", "global") != region:
+                continue
+            jobs.append((cat, feed_info))
+
+    candidates = []
+    if jobs:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(fetch_one_feed, cat, feed_info, None) for cat, feed_info in jobs]
+            for future in as_completed(futures):
+                # Only keep the freshest couple of entries per feed as bulletin candidates
+                candidates.extend(future.result()[:BULLETIN_CANDIDATES_PER_FEED])
+
+    candidates.sort(key=lambda x: x["published"], reverse=True)
+
+    bulletins = []
+    for item in candidates[:BULLETIN_COUNT]:
+        pub_date = datetime.fromisoformat(item["published"])
+        detail = item["summary"] if item["summary"] and item["summary"].strip() else item["title"]
+        bulletins.append({
+            "time": format_relative_time(pub_date),
+            "text": item["title"],
+            "detail": detail,
+            "link": item["link"],
+            "source": item["source"],
+            "category": item["category"]
+        })
+    return bulletins
